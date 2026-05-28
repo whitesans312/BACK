@@ -1,0 +1,68 @@
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### Secrets / local environment ###
+.env
+.env.*
+!.env.example
+.envrc
+*.local
+secrets/
+*.secret
+*.secret.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+application-local.properties
+application-*.local.properties
+application-secret*.properties
+src/main/resources/application-local.properties
+src/main/resources/application-*.local.properties
+src/main/resources/application-secret*.properties
+
+### Backups / archives with possible secrets ###
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.bak
+*backup*
+*respaldo*
+
+### Logs ###
+logs/
+*.log
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
