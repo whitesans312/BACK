@@ -1,5 +1,6 @@
 package com.ergpos.app.repositories;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -19,10 +20,28 @@ public interface DevolucionGarantiaRepository extends JpaRepository<DevolucionGa
     List<DevolucionGarantia> findByTipoOrderByFechaDesc(String tipo);
     List<DevolucionGarantia> findTop20ByOrderByFechaDesc();
 
-    @Query("SELECT DISTINCT d FROM DevolucionGarantia d WHERE d.cliente.id = :clienteId OR (d.venta IS NOT NULL AND d.venta.clienteTelefono = :telefono) ORDER BY d.fecha DESC")
+    @Query("""
+           SELECT DISTINCT d
+           FROM DevolucionGarantia d
+           LEFT JOIN d.cliente dc
+           LEFT JOIN d.venta v
+           LEFT JOIN v.cliente vc
+           LEFT JOIN d.entrega e
+           LEFT JOIN e.cliente ec
+           WHERE dc.id = :clienteId
+              OR (:nombre IS NOT NULL AND LOWER(TRIM(d.clienteNombre)) = LOWER(TRIM(:nombre)))
+              OR vc.id = :clienteId
+              OR (:telefono IS NOT NULL AND v.clienteTelefono = :telefono)
+              OR (:nombre IS NOT NULL AND LOWER(TRIM(v.clienteNombre)) = LOWER(TRIM(:nombre)))
+              OR ec.id = :clienteId
+              OR (:telefono IS NOT NULL AND e.clienteTelefono = :telefono)
+              OR (:nombre IS NOT NULL AND LOWER(TRIM(e.clienteNombre)) = LOWER(TRIM(:nombre)))
+           ORDER BY d.fecha DESC
+           """)
     List<DevolucionGarantia> findByClienteIdOrTelefonoOrderByFechaDesc(
         @Param("clienteId") UUID clienteId,
-        @Param("telefono") String telefono
+        @Param("telefono") String telefono,
+        @Param("nombre") String nombre
     );
 
     @Query("SELECT COALESCE(SUM(d.montoDevuelto), 0) FROM DevolucionGarantia d WHERE d.estado = 'REGISTRADA' OR d.estado = 'PROCESADA'")
@@ -36,4 +55,10 @@ public interface DevolucionGarantiaRepository extends JpaRepository<DevolucionGa
 
     @Query("SELECT COUNT(d) FROM DevolucionGarantia d WHERE d.entrega.id = :entregaId AND d.estado <> 'ANULADA'")
     long countActivasByEntregaId(@Param("entregaId") UUID entregaId);
+
+    @Query("SELECT COALESCE(SUM(d.montoDevuelto), 0) FROM DevolucionGarantia d WHERE d.venta.id = :ventaId AND d.estado <> 'ANULADA'")
+    BigDecimal sumMontoDevueltoByVentaId(@Param("ventaId") UUID ventaId);
+
+    @Query("SELECT COALESCE(SUM(d.montoDevuelto), 0) FROM DevolucionGarantia d WHERE d.entrega.id = :entregaId AND d.estado <> 'ANULADA'")
+    BigDecimal sumMontoDevueltoByEntregaId(@Param("entregaId") UUID entregaId);
 }

@@ -73,18 +73,22 @@ public class UsuarioController {
         if (usuarioService.existsByEmail(usuario.getEmail())) {
             return ResponseEntity.badRequest().body("El email ya está registrado");
         }
-        Usuario guardado = usuarioService.save(usuario);
-        auditoriaService.registrar(
-            null, "Admin",
-            "CREAR_USUARIO", "USUARIOS",
-            guardado.getId(),
-            "Usuario creado: " + guardado.getNombre() + " (" + guardado.getEmail() + ")"
-        );
-        return ResponseEntity.ok(guardado);
+        try {
+            Usuario guardado = usuarioService.save(usuario);
+            auditoriaService.registrar(
+                null, "Admin",
+                "CREAR_USUARIO", "USUARIOS",
+                guardado.getId(),
+                "Usuario creado: " + guardado.getNombre() + " (" + guardado.getEmail() + ")"
+            );
+            return ResponseEntity.ok(guardado);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<Usuario> update(@PathVariable UUID id, @RequestBody Usuario usuarioDetails) {
+    public ResponseEntity<Object> update(@PathVariable UUID id, @Valid @RequestBody Usuario usuarioDetails) {
         Optional<Usuario> opt = usuarioService.findById(id);
         if (opt.isEmpty()) return ResponseEntity.notFound().build();
 
@@ -103,14 +107,18 @@ public class UsuarioController {
             existing.setRol(nuevoRol);
         }
 
-        Usuario actualizado = usuarioService.save(existing);
-        auditoriaService.registrar(
-            null, "Admin",
-            "EDITAR_USUARIO", "USUARIOS",
-            actualizado.getId(),
-            "Usuario editado: " + actualizado.getNombre() + " (" + actualizado.getEmail() + ")"
-        );
-        return ResponseEntity.ok(actualizado);
+        try {
+            Usuario actualizado = usuarioService.save(existing);
+            auditoriaService.registrar(
+                null, "Admin",
+                "EDITAR_USUARIO", "USUARIOS",
+                actualizado.getId(),
+                "Usuario editado: " + actualizado.getNombre() + " (" + actualizado.getEmail() + ")"
+            );
+            return ResponseEntity.ok(actualizado);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 
     @DeleteMapping("/{id}")

@@ -13,7 +13,7 @@ Base de datos PostgreSQL (Supabase). Versión 1.0 — producción.
 | 2 | Secuencias de facturación (`seq_facturas_orden`, `seq_facturas_venta`) |
 | 3 | Tablas catálogo (valores de referencia para estados y tipos) |
 | 4 | Tablas base (`categorias`, `roles`) |
-| 5 | Tablas principales (`usuarios`, `clientes`, `proveedores`, `productos`) |
+| 5 | Tablas principales (`usuarios`, `clientes`, `proveedores`, `productos`, `configuracion_negocio`) |
 | 6 | Compras y sus ítems |
 | 7 | Órdenes de servicio (entregas), ítems y pagos |
 | 8 | Ventas directas (POS) y sus ítems |
@@ -57,7 +57,7 @@ Base de datos PostgreSQL (Supabase). Versión 1.0 — producción.
 --    2. Secuencias de facturación
 --    3. Tablas catálogo (valores de referencia)
 --    4. Tablas base (categorías, roles)
---    5. Tablas principales (usuarios, clientes, proveedores, productos)
+--    5. Tablas principales (usuarios, clientes, proveedores, productos, configuracion_negocio)
 --    6. Compras y sus ítems
 --    7. Entregas, ítems y pagos
 --    8. Ventas y sus ítems
@@ -356,7 +356,7 @@ INSERT INTO public.roles (id, nombre, activo, created_at) VALUES
 -- ================================================================
 -- BLOQUE 5 — TABLAS PRINCIPALES
 --
--- usuarios, clientes, proveedores y productos.
+-- usuarios, clientes, proveedores, productos y configuracion_negocio.
 -- Son el núcleo del sistema; casi todas las demás tablas
 -- las referencian.
 -- ================================================================
@@ -492,6 +492,21 @@ CREATE INDEX IF NOT EXISTS idx_productos_activo    ON public.productos USING btr
 CREATE TRIGGER trg_productos_updated_at
     BEFORE UPDATE ON public.productos
     FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
+
+
+-- ----------------------------------------------------------------
+-- configuracion_negocio
+-- Parametros editables del negocio usados por la aplicacion
+-- para datos de factura, textos, valores operativos y ajustes.
+-- ----------------------------------------------------------------
+CREATE TABLE public.configuracion_negocio (
+    clave       CHARACTER VARYING(50)  NOT NULL,
+    valor       TEXT                   NOT NULL,
+    categoria   CHARACTER VARYING(30)  NOT NULL,
+    descripcion CHARACTER VARYING(255)     NULL,
+    updated_at  TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT configuracion_negocio_pkey PRIMARY KEY (clave)
+) TABLESPACE pg_default;
 
 
 -- ================================================================
@@ -866,6 +881,7 @@ CREATE TABLE public.devolucion_garantia_items (
 CREATE INDEX IF NOT EXISTS idx_devoluciones_venta ON public.devoluciones_garantias USING btree (venta_id) TABLESPACE pg_default;
 CREATE INDEX IF NOT EXISTS idx_devoluciones_entrega ON public.devoluciones_garantias USING btree (entrega_id) TABLESPACE pg_default;
 CREATE INDEX IF NOT EXISTS idx_devoluciones_fecha ON public.devoluciones_garantias USING btree (fecha DESC) TABLESPACE pg_default;
+CREATE INDEX IF NOT EXISTS idx_devoluciones_cliente ON public.devoluciones_garantias USING btree (cliente_id) TABLESPACE pg_default;
 CREATE INDEX IF NOT EXISTS idx_devolucion_items_devolucion ON public.devolucion_garantia_items USING btree (devolucion_id) TABLESPACE pg_default;
 CREATE INDEX IF NOT EXISTS idx_devolucion_items_producto ON public.devolucion_garantia_items USING btree (producto_id) TABLESPACE pg_default;
 

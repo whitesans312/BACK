@@ -92,6 +92,8 @@ public class ClienteController {
                 "Cliente creado: " + guardado.getNombre()
             );
             return ResponseEntity.ok(guardado);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
             return ResponseEntity.status(500).body("Error al guardar el cliente: " + e.getMessage());
         }
@@ -126,6 +128,8 @@ public class ClienteController {
                 "Cliente editado: " + actualizado.getNombre()
             );
             return ResponseEntity.ok(actualizado);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
             return ResponseEntity.status(500).body("Error al actualizar el cliente: " + e.getMessage());
         }

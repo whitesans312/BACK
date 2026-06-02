@@ -11,10 +11,12 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import lombok.Data;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -28,6 +30,11 @@ public class Usuario {
     private UUID id;
     
     @NotBlank(message = "El nombre es obligatorio")
+    @Pattern(
+        regexp = "^[\\p{L}]+(?:[ '\\-][\\p{L}]+)*$",
+        message = "El nombre solo debe contener letras y espacios"
+    )
+    @Column(length = 120)
     private String nombre;
 
     @NotBlank(message = "El email es obligatorio")
@@ -43,6 +50,11 @@ public class Usuario {
     @JoinColumn(name = "rol_id", nullable = false)
     private Rol rol;
 
+    @Pattern(
+        regexp = "^$|^[0-9]{7,20}$",
+        message = "El telefono solo debe contener numeros"
+    )
+    @Column(length = 20)
     private String telefono;
     private Boolean activo = true;
 
@@ -52,8 +64,28 @@ public class Usuario {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt = LocalDateTime.now();
 
+    @PrePersist
+    public void prePersist() {
+        this.createdAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now();
+        normalizar();
+    }
+
     @PreUpdate
     public void preUpdate() {
         this.updatedAt = LocalDateTime.now();
+        normalizar();
+    }
+
+    private void normalizar() {
+        if (this.nombre != null) {
+            this.nombre = this.nombre.trim();
+        }
+        if (this.email != null) {
+            this.email = this.email.trim().toLowerCase();
+        }
+        if (this.telefono != null) {
+            this.telefono = this.telefono.trim();
+        }
     }
 }

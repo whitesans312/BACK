@@ -41,6 +41,8 @@ public class AuthService {
     }
 
     public Usuario register(Usuario usuario) {
+        normalizar(usuario);
+
         if (usuarioRepository.existsByEmail(usuario.getEmail())) {
             throw new EmailAlreadyExistsException("El email ya está registrado: " + usuario.getEmail());
         }
@@ -50,6 +52,19 @@ public class AuthService {
 
     private boolean isBcryptHash(String value) {
         return value != null && (value.startsWith("$2a$") || value.startsWith("$2b$") || value.startsWith("$2y$"));
+    }
+
+    private void normalizar(Usuario usuario) {
+        if (usuario.getNombre() != null) {
+            usuario.setNombre(usuario.getNombre().trim());
+        }
+        if (usuario.getEmail() != null) {
+            usuario.setEmail(usuario.getEmail().trim().toLowerCase());
+        }
+        if (usuario.getTelefono() != null) {
+            String telefono = usuario.getTelefono().trim();
+            usuario.setTelefono(telefono.isBlank() ? null : telefono);
+        }
     }
 
     public static class EmailAlreadyExistsException extends RuntimeException {

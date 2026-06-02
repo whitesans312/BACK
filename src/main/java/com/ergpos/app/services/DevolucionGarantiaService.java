@@ -111,9 +111,6 @@ public class DevolucionGarantiaService {
             if (!ESTADO_COMPLETADA.equals(venta.getEstado())) {
                 throw new IllegalStateException("Solo se registran devoluciones sobre ventas completadas");
             }
-            if (devolucionRepository.countActivasByVentaId(venta.getId()) > 0) {
-                throw new IllegalStateException("Esta venta ya tiene una devolucion o garantia activa registrada. Anula la existente antes de registrar una nueva.");
-            }
             solicitud.setVenta(venta);
             solicitud.setCliente(venta.getCliente());
             solicitud.setClienteNombre(venta.getClienteNombre());
@@ -122,9 +119,6 @@ public class DevolucionGarantiaService {
                     .orElseThrow(() -> new IllegalArgumentException("Orden no encontrada"));
             if (!ESTADO_FINALIZADO.equals(entrega.getEstado())) {
                 throw new IllegalStateException("Solo se registran devoluciones o garantias sobre ordenes finalizadas");
-            }
-            if (devolucionRepository.countActivasByEntregaId(entrega.getId()) > 0) {
-                throw new IllegalStateException("Esta orden ya tiene una devolucion o garantia activa registrada. Anula la existente antes de registrar una nueva.");
             }
             solicitud.setEntrega(entrega);
             solicitud.setCliente(entrega.getCliente());
@@ -173,7 +167,11 @@ public class DevolucionGarantiaService {
 
         BigDecimal limiteMaximo = totalItems;
         if (entrega != null && entrega.getManoObra() != null) {
-            limiteMaximo = limiteMaximo.add(entrega.getManoObra());
+            BigDecimal manoObraDisponible = entrega.getManoObra().subtract(calcularManoObraDevuelta(entrega));
+            if (manoObraDisponible.compareTo(BigDecimal.ZERO) < 0) {
+                manoObraDisponible = BigDecimal.ZERO;
+            }
+            limiteMaximo = limiteMaximo.add(manoObraDisponible);
         }
 
         if (!TIPO_DEVOLUCION.equals(tipo)) {
@@ -183,7 +181,7 @@ public class DevolucionGarantiaService {
                 || solicitud.getMontoDevuelto().compareTo(BigDecimal.ZERO) < 0) {
             solicitud.setMontoDevuelto(BigDecimal.ZERO);
         } else if (solicitud.getMontoDevuelto().compareTo(limiteMaximo) > 0) {
-            throw new IllegalArgumentException("El monto devuelto no puede superar el valor total disponible para devolución (productos y mano de obra)");
+            throw new IllegalArgumentException("El monto devuelto no puede superar el saldo disponible para devolucion (productos y mano de obra). Disponible: " + limiteMaximo);
         }
 
         DevolucionGarantia guardada = devolucionRepository.save(solicitud);
@@ -269,6 +267,22 @@ public class DevolucionGarantiaService {
             throw new IllegalStateException("Cantidad mayor a la disponible para devolver. Disponible: " + disponible);
         }
         return origen.getPrecioUnitario() != null ? origen.getPrecioUnitario() : BigDecimal.ZERO;
+    }
+
+    private BigDecimal calcularManoObraDevuelta(Entrega entrega) {
+        return devolucionRepository.findByEntregaIdOrderByFechaDesc(entrega.getId()).stream()
+                .filter(d -> !ESTADO_ANULADA.equals(d.getEstado()))
+                .map(d -> {
+                    BigDecimal monto = d.getMontoDevuelto() != null ? d.getMontoDevuelto() : BigDecimal.ZERO;
+                    BigDecimal totalProductos = d.getItems() != null
+                            ? d.getItems().stream()
+                                    .map(DevolucionGarantiaItem::getSubtotal)
+                                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                            : BigDecimal.ZERO;
+                    BigDecimal manoObra = monto.subtract(totalProductos);
+                    return manoObra.compareTo(BigDecimal.ZERO) > 0 ? manoObra : BigDecimal.ZERO;
+                })
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     private void crearEntradasInventario(DevolucionGarantia devolucion, Usuario usuario) {

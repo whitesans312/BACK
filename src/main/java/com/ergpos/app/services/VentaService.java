@@ -50,7 +50,7 @@ public class VentaService {
         this.configService          = configService;
     }
 
-    public List<Venta> findAll()                     { return ventaRepository.findAll(); }
+    public List<Venta> findAll()                     { return ventaRepository.findAllByOrderByFechaDesc(); }
     public Optional<Venta> findById(UUID id)         { return ventaRepository.findById(id); }
     public List<Venta> findByEstado(String estado)   { return ventaRepository.findByEstado(estado); }
     public List<Venta> findRecientes()               { return ventaRepository.findTop10ByOrderByFechaDesc(); }
@@ -206,4 +206,3 @@ public class VentaService {
         );
     }
 }
-

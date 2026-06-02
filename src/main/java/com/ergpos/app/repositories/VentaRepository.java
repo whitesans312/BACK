@@ -16,6 +16,8 @@ public interface VentaRepository extends JpaRepository<Venta, UUID> {
 
     List<Venta> findByEstado(String estado);
 
+    List<Venta> findAllByOrderByFechaDesc();
+
     List<Venta> findByVendedorId(UUID vendedorId);
 
     List<Venta> findByClienteIdOrderByFechaDesc(UUID clienteId);

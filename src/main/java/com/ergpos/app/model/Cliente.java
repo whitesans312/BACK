@@ -19,15 +19,23 @@ public class Cliente {
     private UUID id;
 
     @NotBlank(message = "El nombre es obligatorio")
+    @Pattern(
+        regexp = "^[\\p{L}]+(?:[ '\\-][\\p{L}]+)*$",
+        message = "El nombre solo debe contener letras y espacios"
+    )
     @Column(length = 120)
     private String nombre;
 
+    @Pattern(
+        regexp = "^$|^[0-9]{5,30}$",
+        message = "El documento solo debe contener numeros"
+    )
     @Column(length = 30)
     private String documento;
 
     @Pattern(
-        regexp = "^[0-9+\\-() ]{7,20}$",
-        message = "Teléfono inválido"
+        regexp = "^[0-9]{7,20}$",
+        message = "El telefono solo debe contener numeros"
     )
     @Column(unique = true, length = 20)
     private String telefono;
@@ -84,6 +92,12 @@ public class Cliente {
         }
         if (this.nombre != null) {
             this.nombre = this.nombre.trim();
+        }
+        if (this.telefono != null) {
+            this.telefono = this.telefono.trim();
+        }
+        if (this.documento != null) {
+            this.documento = this.documento.trim();
         }
     }
 }

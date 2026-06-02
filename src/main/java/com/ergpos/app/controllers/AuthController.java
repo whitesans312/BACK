@@ -16,6 +16,8 @@ import com.ergpos.app.security.JwtService;
 import com.ergpos.app.services.AuditoriaService;
 import com.ergpos.app.services.AuthService;
 
+import jakarta.validation.Valid;
+
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -68,7 +70,7 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<Object> register(@RequestBody Usuario usuario) {
+    public ResponseEntity<Object> register(@Valid @RequestBody Usuario usuario) {
         try {
             Usuario creado = authService.register(usuario);
             auditoriaService.registrarActual(
@@ -79,6 +81,8 @@ public class AuthController {
             return ResponseEntity.ok(creado);
         } catch (AuthService.EmailAlreadyExistsException e) {
             return ResponseEntity.status(400).body(e.getMessage());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
         }
     }
 

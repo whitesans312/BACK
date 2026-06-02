@@ -63,7 +63,10 @@ public class ClienteService {
 
         List<Entrega> ordenes = entregaRepository.findByClienteIdOrTelefonoOrderByFechaCreacionDesc(clienteId, telefono);
 
-        List<DevolucionGarantia> devoluciones = devolucionGarantiaRepository.findByClienteIdOrTelefonoOrderByFechaDesc(clienteId, telefono);
+        List<DevolucionGarantia> devoluciones = devolucionGarantiaRepository.findByClienteIdOrTelefonoOrderByFechaDesc(
+                clienteId,
+                telefono,
+                cliente.getNombre());
 
         BigDecimal totalVentas = ventas.stream()
                 .filter(v -> "COMPLETADA".equals(v.getEstado()))
@@ -119,11 +122,34 @@ public class ClienteService {
 
         // ── Normalización ─────────────────────────────
         if (cliente.getEmail() != null) {
-            cliente.setEmail(cliente.getEmail().trim().toLowerCase());
+            String email = cliente.getEmail().trim().toLowerCase();
+            cliente.setEmail(email.isBlank() ? null : email);
         }
 
         if (cliente.getTelefono() != null) {
-            cliente.setTelefono(cliente.getTelefono().trim());
+            String telefono = cliente.getTelefono().trim();
+            cliente.setTelefono(telefono.isBlank() ? null : telefono);
+        }
+
+        if (cliente.getNombre() != null) {
+            cliente.setNombre(cliente.getNombre().trim());
+        }
+
+        if (cliente.getDocumento() != null) {
+            String documento = cliente.getDocumento().trim();
+            cliente.setDocumento(documento.isBlank() ? null : documento);
+        }
+
+        if (cliente.getTelefono() != null && !cliente.getTelefono().matches("^[0-9]{7,20}$")) {
+            throw new IllegalArgumentException("El telefono solo debe contener numeros");
+        }
+
+        if (cliente.getNombre() != null && !cliente.getNombre().matches("^[\\p{L}]+(?:[ '\\-][\\p{L}]+)*$")) {
+            throw new IllegalArgumentException("El nombre solo debe contener letras y espacios");
+        }
+
+        if (cliente.getDocumento() != null && !cliente.getDocumento().matches("^[0-9]{5,30}$")) {
+            throw new IllegalArgumentException("El documento solo debe contener numeros");
         }
 
         // ── Validación de contacto ───────────────────
@@ -166,11 +192,25 @@ public class ClienteService {
             throw new IllegalArgumentException("El teléfono es obligatorio para crear o buscar cliente");
         }
 
-        return clienteRepository.findByTelefono(telefono)
+        telefono = telefono.trim();
+        if (!telefono.matches("^[0-9]{7,20}$")) {
+            throw new IllegalArgumentException("El telefono solo debe contener numeros");
+        }
+        if (nombre != null) {
+            nombre = nombre.trim();
+            if (!nombre.isBlank() && !nombre.matches("^[\\p{L}]+(?:[ '\\-][\\p{L}]+)*$")) {
+                throw new IllegalArgumentException("El nombre solo debe contener letras y espacios");
+            }
+        }
+
+        final String telefonoNormalizado = telefono;
+        final String nombreNormalizado = nombre;
+
+        return clienteRepository.findByTelefono(telefonoNormalizado)
             .orElseGet(() -> {
                 Cliente nuevo = new Cliente();
-                nuevo.setTelefono(telefono);
-                nuevo.setNombre(nombre != null && !nombre.isBlank() ? nombre : "Cliente");
+                nuevo.setTelefono(telefonoNormalizado);
+                nuevo.setNombre(nombreNormalizado != null && !nombreNormalizado.isBlank() ? nombreNormalizado : "Cliente");
                 return clienteRepository.save(nuevo);
             });
     }

@@ -2,6 +2,7 @@ package com.ergpos.app.controllers;
 
 import com.ergpos.app.model.Auditoria;
 import com.ergpos.app.model.Cliente;
+import com.ergpos.app.model.DevolucionGarantia;
 import com.ergpos.app.model.MovimientoInventario;
 import com.ergpos.app.model.Producto;
 import com.ergpos.app.model.Usuario;
@@ -13,9 +14,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.text.Normalizer;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -84,6 +88,14 @@ public class AsistenteChatController {
         }
 
         try {
+            String respuestaInterna = resolverInternamente(pregunta);
+            if (respuestaInterna != null) {
+                return ResponseEntity.ok(Map.of(
+                    "respuesta", respuestaInterna,
+                    "fuente",    "INTERNO"
+                ));
+            }
+
             String contexto   = construirContextoNegocio();
             String respuesta  = groqService.preguntar(SYSTEM_PROMPT + "\n\n" + contexto, pregunta);
             return ResponseEntity.ok(Map.of(
@@ -100,6 +112,11 @@ public class AsistenteChatController {
                 "respuesta", "⚠️ " + e.getMessage(),
                 "fuente",    "ERROR"
             ));
+        } catch (RuntimeException e) {
+            return ResponseEntity.ok(Map.of(
+                "respuesta", "No pude preparar los datos internos para responder. Revisa los logs del backend: " + e.getMessage(),
+                "fuente",    "ERROR"
+            ));
         }
     }
 
@@ -114,7 +131,7 @@ public class AsistenteChatController {
     // ── Motor Interno de Intenciones ────────────────────────────────────────
 
     private String resolverInternamente(String p) {
-        String q = p.toLowerCase().strip();
+        String q = normalizar(p);
 
         if (esConsultaGeneral(q)) {
             return null;
@@ -158,6 +175,11 @@ public class AsistenteChatController {
             return stockBajoResumen();
         }
 
+        if (matches(q, "devoluciones", "devolucion", "devolución", "garantias", "garantías")
+                && matches(q, "clientes", "cliente", "hay", "quienes", "quiénes")) {
+            return clientesConDevolucionesResumen();
+        }
+
         if (matches(q, "clientes", "cliente", "que clientes", "qué clientes", "lista de clientes")) {
             return clientesResumen();
         }
@@ -166,9 +188,26 @@ public class AsistenteChatController {
             return usuariosResumen();
         }
 
+        // ── VENTAS SEMANA ─────────────────────────────────────────────────────
+        if (matches(q, "ventas", "vendimos", "facturado", "ingresos")
+                && matches(q, "semana", "esta semana", "semanal")) {
+            LocalDate hoy = LocalDate.now();
+            LocalDate inicioSemana = hoy.with(DayOfWeek.MONDAY);
+            LocalDateTime inicio = inicioSemana.atStartOfDay();
+            LocalDateTime fin = hoy.plusDays(1).atStartOfDay();
+            long count = ventaRepository.countCompletadasEnRango(inicio, fin);
+            Double total = ventaRepository.sumTotalCompletadasEnRango(inicio, fin);
+            return "💰 **Ventas de esta semana (%s - %s):**\n• Ventas completadas: **%d**\n• Total facturado: **$%s COP**"
+                    .formatted(inicioSemana.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
+                               hoy.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
+                               count, formatCOP(total));
+        }
+
         // ── VENTAS HOY ────────────────────────────────────────────────────────
-        if (matches(q, "ventas hoy", "vendimos hoy", "facturado hoy", "ingresos hoy",
-                    "cómo vamos hoy", "como vamos hoy", "hoy vendimos")) {
+        if (matches(q, "ventas hoy", "ventas de hoy", "ventas del dia", "ventas dia",
+                    "vendimos hoy", "vendimos dia", "facturado hoy", "facturado dia",
+                    "ingresos hoy", "ingresos dia", "como vamos hoy", "hoy vendimos")
+                || (matches(q, "ventas", "vendimos", "facturado", "ingresos") && matches(q, "hoy", "dia"))) {
             LocalDateTime inicio = LocalDate.now().atStartOfDay();
             LocalDateTime fin    = inicio.plusDays(1);
             long   count = ventaRepository.countCompletadasEnRango(inicio, fin);
@@ -470,6 +509,13 @@ public class AsistenteChatController {
         return false;
     }
 
+    private String normalizar(String text) {
+        if (text == null) return "";
+        return Normalizer.normalize(text.toLowerCase(), Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .strip();
+    }
+
     /** Extrae la palabra significativa después de eliminar las palabras clave y conectores. */
     private String extraerKeyword(String q, String... eliminar) {
         String resultado = q;
@@ -522,6 +568,35 @@ public class AsistenteChatController {
             sb.append("• **%s** — %d uds %s (mín: %d)\n".formatted(p.getNombre(), p.getStock(), est, p.getStockMinimo()));
         });
         if (bajos.size() > 8) sb.append("... y %d más.".formatted(bajos.size() - 8));
+        return sb.toString().trim();
+    }
+
+    private String clientesConDevolucionesResumen() {
+        List<DevolucionGarantia> registros = devolucionRepo.findAll().stream()
+                .filter(d -> !"ANULADA".equals(d.getEstado()))
+                .toList();
+        if (registros.isEmpty()) {
+            return "No hay devoluciones ni garantias activas registradas.";
+        }
+
+        Map<String, List<DevolucionGarantia>> porCliente = registros.stream()
+                .collect(Collectors.groupingBy(
+                        d -> valor(d.getClienteNombre()),
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
+
+        StringBuilder sb = new StringBuilder("Clientes con devoluciones o garantias activas: **%d**\n".formatted(porCliente.size()));
+        porCliente.entrySet().stream().limit(12).forEach(entry -> {
+            BigDecimal total = entry.getValue().stream()
+                    .map(d -> d.getMontoDevuelto() != null ? d.getMontoDevuelto() : BigDecimal.ZERO)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            sb.append("- **%s**: %d registro(s), monto devuelto $%s COP\n"
+                    .formatted(entry.getKey(), entry.getValue().size(), formatCOP(total)));
+        });
+        if (porCliente.size() > 12) {
+            sb.append("... y %d cliente(s) mas.".formatted(porCliente.size() - 12));
+        }
         return sb.toString().trim();
     }
 
