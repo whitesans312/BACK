@@ -80,4 +80,20 @@ public class ReporteExportController {
                 .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
                 .body(data);
     }
+
+    @GetMapping("/tecnicos/excel")
+    public ResponseEntity<byte[]> tecnicosExcel(
+            @RequestParam("desde") String desdeStr,
+            @RequestParam("hasta") String hastaStr) {
+
+        LocalDateTime desde = LocalDate.parse(desdeStr).atStartOfDay();
+        LocalDateTime hasta = LocalDate.parse(hastaStr).atTime(23, 59, 59);
+
+        byte[] data = exportService.exportarTecnicosExcel(desde, hasta);
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=reporte-tecnicos-" + desdeStr + "-a-" + hastaStr + ".xlsx")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(data);
+    }
 }

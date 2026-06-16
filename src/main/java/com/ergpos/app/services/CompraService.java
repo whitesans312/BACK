@@ -16,6 +16,17 @@ import com.ergpos.app.repositories.CompraRepository;
 import com.ergpos.app.repositories.MovimientoInventarioRepository;
 import com.ergpos.app.repositories.ProductoRepository;
 
+/**
+ * Servicio de negocio para el módulo de Órdenes de Compra a Proveedor.
+ * <p>
+ * Gestiona el ciclo completo: creación de borradores (PENDIENTE), confirmación
+ * (que genera movimientos de ENTRADA y actualiza el stock vía trigger de BD) y
+ * cancelación de compras pendientes. Registra auditoría en cada transición de estado.
+ * </p>
+ *
+ * @author ERG-POS Dev Team
+ * @since 1.0
+ */
 @Service
 public class CompraService {
 
@@ -39,6 +50,14 @@ public class CompraService {
     public Optional<Compra> findById(UUID id)       { return compraRepo.findById(id); }
     public List<Compra> findByEstado(String estado) { return compraRepo.findByEstado(estado); }
 
+    /**
+     * Persiste una nueva orden de compra en estado PENDIENTE (borrador).
+     * <p>No modifica el stock hasta que la compra sea confirmada.</p>
+     *
+     * @param compra la orden de compra a guardar con sus ítems y proveedor
+     * @return la {@link Compra} persistida con total calculado
+     * @throws IllegalArgumentException si un producto referenciado no existe
+     */
     // Guardar borrador (sin confirmar stock)
     @Transactional
     public Compra save(Compra compra) {
@@ -65,6 +84,17 @@ public class CompraService {
         return guardada;
     }
 
+    /**
+     * Confirma una orden de compra PENDIENTE, registrando movimientos de ENTRADA
+     * de inventario para cada ítem. El trigger de base de datos ({@code fn_actualizar_stock})
+     * actualiza atómicamente el stock del producto.
+     *
+     * @param compraId UUID de la compra a confirmar
+     * @param usuario  usuario que ejecuta la confirmación (para auditoría)
+     * @return la {@link Compra} en estado CONFIRMADA
+     * @throws IllegalArgumentException si la compra no existe o un producto no se encuentra
+     * @throws IllegalStateException    si la compra no está en estado PENDIENTE
+     */
     // Confirmar compra: registra movimientos ENTRADA (el trigger actualiza el stock)
     @Transactional
     public Compra confirmar(UUID compraId, Usuario usuario) {
@@ -108,6 +138,14 @@ public class CompraService {
         return confirmada;
     }
 
+    /**
+     * Cancela una orden de compra si aún está en estado PENDIENTE.
+     *
+     * @param compraId UUID de la compra a cancelar
+     * @return la {@link Compra} en estado CANCELADA
+     * @throws IllegalArgumentException si la compra no existe
+     * @throws IllegalStateException    si la compra ya estaba CONFIRMADA
+     */
     // Cancelar compra (solo si estaba PENDIENTE)
     @Transactional
     public Compra cancelar(UUID compraId) {

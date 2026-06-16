@@ -21,6 +21,9 @@ Base de datos PostgreSQL (Supabase). Versión 1.0 — producción.
 | 10 | Devoluciones y garantías |
 | 11 | Movimientos de inventario + trigger de stock (va al final) |
 | 12 | Auditoría — log inmutable de todas las acciones del sistema |
+| 13 | Cajas, movimientos de caja y catálogos de caja |
+| 14 | Vistas de analítica y reportes |
+| 15 | Función de proyección de cash flow |
 
 ---
 
@@ -1029,6 +1032,332 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_auditoria_no_update_delete
     BEFORE UPDATE OR DELETE ON public.auditoria
     FOR EACH ROW EXECUTE FUNCTION public.fn_auditoria_bloquear_modificaciones();
+
+
+-- ================================================================
+-- BLOQUE 13 — CAJAS Y MOVIMIENTOS DE CAJA
+--
+-- Sistema de gestión de efectivo diario. Usa catálogos para estados
+-- y tipos de movimiento, manteniendo el mismo patrón del esquema:
+-- valores fijos como FK, no ENUMs ni strings libres.
+-- ================================================================
+
+CREATE TABLE IF NOT EXISTS public.catalogo_estados_caja (
+    codigo       CHARACTER VARYING(20) NOT NULL,
+    descripcion  CHARACTER VARYING(80) NOT NULL,
+    orden_visual SMALLINT              NOT NULL DEFAULT 0,
+    CONSTRAINT catalogo_estados_caja_pkey PRIMARY KEY (codigo)
+) TABLESPACE pg_default;
+
+INSERT INTO public.catalogo_estados_caja (codigo, descripcion, orden_visual)
+VALUES
+    ('ABIERTA', 'Caja abierta, recibiendo transacciones', 1),
+    ('CERRADA', 'Caja cerrada y contabilizada',           2),
+    ('ANULADA', 'Caja anulada sin aplicar movimientos',   3)
+ON CONFLICT (codigo) DO NOTHING;
+
+
+CREATE TABLE IF NOT EXISTS public.catalogo_tipos_movimiento_caja (
+    codigo       CHARACTER VARYING(20) NOT NULL,
+    descripcion  CHARACTER VARYING(80) NOT NULL,
+    afecta_saldo CHARACTER VARYING(10) NOT NULL,
+    orden_visual SMALLINT              NOT NULL DEFAULT 0,
+    CONSTRAINT catalogo_tipos_movimiento_caja_pkey PRIMARY KEY (codigo),
+    CONSTRAINT catalogo_tipos_movimiento_caja_afecta_check
+        CHECK (afecta_saldo IN ('INGRESO', 'EGRESO', 'NEUTRO'))
+) TABLESPACE pg_default;
+
+INSERT INTO public.catalogo_tipos_movimiento_caja
+    (codigo, descripcion, afecta_saldo, orden_visual)
+VALUES
+    ('INGRESO',    'Ingreso manual de efectivo',       'INGRESO', 1),
+    ('PAGO_VENTA', 'Pago recibido por venta directa',  'INGRESO', 2),
+    ('PAGO_ORDEN', 'Pago recibido por orden servicio', 'INGRESO', 3),
+    ('EGRESO',     'Egreso manual de efectivo',        'EGRESO',  4),
+    ('COMPRA',     'Pago o salida por compra',         'EGRESO',  5),
+    ('AJUSTE',     'Ajuste operativo de caja',         'NEUTRO',  6),
+    ('DEVOLUCION', 'Salida por devolucion o garantia', 'EGRESO',  7)
+ON CONFLICT (codigo) DO NOTHING;
+
+
+CREATE TABLE IF NOT EXISTS public.cajas (
+    id             UUID                   NOT NULL DEFAULT gen_random_uuid(),
+    usuario_id     UUID                   NOT NULL,
+    monto_inicial  NUMERIC(10, 2)         NOT NULL DEFAULT 0,
+    monto_final    NUMERIC(10, 2)             NULL,
+    estado         CHARACTER VARYING(20)  NOT NULL DEFAULT 'ABIERTA',
+    fecha_apertura TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    fecha_cierre   TIMESTAMP WITHOUT TIME ZONE     NULL,
+    notas          TEXT                       NULL,
+    created_at     TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT cajas_pkey PRIMARY KEY (id),
+    CONSTRAINT cajas_usuario_fkey FOREIGN KEY (usuario_id)
+        REFERENCES public.usuarios (id) ON DELETE RESTRICT,
+    CONSTRAINT cajas_estado_fkey FOREIGN KEY (estado)
+        REFERENCES public.catalogo_estados_caja (codigo) ON DELETE RESTRICT,
+    CONSTRAINT cajas_monto_inicial_check CHECK (monto_inicial >= 0),
+    CONSTRAINT cajas_monto_final_check CHECK (monto_final IS NULL OR monto_final >= 0),
+    CONSTRAINT cajas_fecha_cierre_check CHECK (
+        fecha_cierre IS NULL OR fecha_cierre >= fecha_apertura
+    )
+) TABLESPACE pg_default;
+
+CREATE INDEX IF NOT EXISTS idx_cajas_usuario_id
+    ON public.cajas USING btree (usuario_id) TABLESPACE pg_default;
+
+CREATE INDEX IF NOT EXISTS idx_cajas_estado
+    ON public.cajas USING btree (estado) TABLESPACE pg_default;
+
+CREATE INDEX IF NOT EXISTS idx_cajas_fecha_apertura
+    ON public.cajas USING btree (fecha_apertura DESC) TABLESPACE pg_default;
+
+DROP TRIGGER IF EXISTS trg_cajas_updated_at ON public.cajas;
+CREATE TRIGGER trg_cajas_updated_at
+    BEFORE UPDATE ON public.cajas
+    FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
+
+
+CREATE TABLE IF NOT EXISTS public.movimientos_caja (
+    id           UUID                   NOT NULL DEFAULT gen_random_uuid(),
+    caja_id      UUID                   NOT NULL,
+    tipo         CHARACTER VARYING(20)  NOT NULL,
+    concepto     CHARACTER VARYING(255) NOT NULL,
+    monto        NUMERIC(10, 2)         NOT NULL,
+    referencia   CHARACTER VARYING(100)     NULL,
+    usuario_id   UUID                       NULL,
+    fecha        TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    notas        TEXT                       NULL,
+    created_at   TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT movimientos_caja_pkey PRIMARY KEY (id),
+    CONSTRAINT movimientos_caja_caja_fkey FOREIGN KEY (caja_id)
+        REFERENCES public.cajas (id) ON DELETE CASCADE,
+    CONSTRAINT movimientos_caja_tipo_fkey FOREIGN KEY (tipo)
+        REFERENCES public.catalogo_tipos_movimiento_caja (codigo) ON DELETE RESTRICT,
+    CONSTRAINT movimientos_caja_usuario_fkey FOREIGN KEY (usuario_id)
+        REFERENCES public.usuarios (id) ON DELETE SET NULL,
+    CONSTRAINT movimientos_caja_monto_check CHECK (monto > 0)
+) TABLESPACE pg_default;
+
+CREATE INDEX IF NOT EXISTS idx_movimientos_caja_caja_id
+    ON public.movimientos_caja USING btree (caja_id) TABLESPACE pg_default;
+
+CREATE INDEX IF NOT EXISTS idx_movimientos_caja_tipo
+    ON public.movimientos_caja USING btree (tipo) TABLESPACE pg_default;
+
+CREATE INDEX IF NOT EXISTS idx_movimientos_caja_fecha
+    ON public.movimientos_caja USING btree (fecha DESC) TABLESPACE pg_default;
+
+CREATE INDEX IF NOT EXISTS idx_movimientos_caja_usuario_id
+    ON public.movimientos_caja USING btree (usuario_id) TABLESPACE pg_default;
+
+
+-- ================================================================
+-- BLOQUE 14 — VISTAS PARA ANALÍTICA Y REPORTES
+--
+-- Vistas de solo lectura para dashboards. No almacenan datos físicos;
+-- transforman tablas existentes de ventas, órdenes, categorías y caja.
+-- ================================================================
+
+DROP VIEW IF EXISTS public.vw_ventas_por_vendedor;
+CREATE VIEW public.vw_ventas_por_vendedor AS
+SELECT
+    v.vendedor_id,
+    u.nombre AS vendedor_nombre,
+    u.email,
+    COUNT(v.id) AS total_ventas,
+    SUM(CASE WHEN v.estado = 'COMPLETADA' THEN 1 ELSE 0 END)::INTEGER AS ventas_completadas,
+    COALESCE(SUM(CASE WHEN v.estado = 'COMPLETADA' THEN v.total ELSE 0 END), 0::NUMERIC(10,2)) AS total_ingreso,
+    MAX(v.fecha) AS ultima_venta,
+    MIN(v.fecha) AS primera_venta
+FROM public.ventas v
+LEFT JOIN public.usuarios u ON v.vendedor_id = u.id
+WHERE v.vendedor_id IS NOT NULL
+GROUP BY v.vendedor_id, u.nombre, u.email
+ORDER BY total_ingreso DESC NULLS LAST;
+
+
+DROP VIEW IF EXISTS public.vw_rentabilidad_categoria;
+CREATE VIEW public.vw_rentabilidad_categoria AS
+SELECT
+    c.id,
+    c.nombre AS categoria,
+    COUNT(DISTINCT p.id) AS productos_activos,
+    COUNT(DISTINCT CASE WHEN v.id IS NOT NULL THEN vi.id END) AS items_vendidos,
+    COALESCE(SUM(CASE WHEN v.id IS NOT NULL THEN vi.cantidad ELSE 0 END), 0)::INTEGER AS cantidad_total_vendida,
+    COALESCE(SUM(
+        CASE WHEN v.id IS NOT NULL
+             THEN vi.cantidad * vi.precio_unitario
+             ELSE 0
+        END
+    ), 0::NUMERIC(10,2))::NUMERIC(10,2) AS ingreso_total,
+    COALESCE(ROUND(
+        SUM(CASE WHEN v.id IS NOT NULL THEN vi.cantidad * vi.precio_unitario ELSE 0 END)
+        / NULLIF(SUM(CASE WHEN v.id IS NOT NULL THEN vi.cantidad ELSE 0 END), 0),
+        2
+    ), 0::NUMERIC(10,2)) AS precio_promedio,
+    (COALESCE(SUM(
+        CASE WHEN v.id IS NOT NULL
+             THEN vi.cantidad * vi.precio_unitario
+             ELSE 0
+        END
+    ), 0::NUMERIC(10,2)) * 0.6)::NUMERIC(10,2) AS costo_estimado,
+    (COALESCE(SUM(
+        CASE WHEN v.id IS NOT NULL
+             THEN vi.cantidad * vi.precio_unitario
+             ELSE 0
+        END
+    ), 0::NUMERIC(10,2)) * 0.4)::NUMERIC(10,2) AS ganancia_estimada,
+    40.0::NUMERIC(5,2) AS margen_porcentaje
+FROM public.categorias c
+LEFT JOIN public.productos p
+    ON c.id = p.categoria_id
+   AND p.activo = TRUE
+LEFT JOIN public.venta_items vi
+    ON p.id = vi.producto_id
+LEFT JOIN public.ventas v
+    ON vi.venta_id = v.id
+   AND v.estado = 'COMPLETADA'
+GROUP BY c.id, c.nombre
+ORDER BY ingreso_total DESC NULLS LAST;
+
+
+DROP VIEW IF EXISTS public.vw_rendimiento_tecnicos;
+CREATE VIEW public.vw_rendimiento_tecnicos AS
+SELECT
+    e.tecnico_id,
+    u.nombre AS tecnico_nombre,
+    u.email,
+    COUNT(e.id) AS ordenes_totales,
+    SUM(CASE WHEN e.estado = 'FINALIZADO' THEN 1 ELSE 0 END)::INTEGER AS ordenes_completadas,
+    SUM(
+        CASE
+            WHEN e.estado = 'FINALIZADO'
+             AND e.fecha_entrega IS NOT NULL
+             AND (e.fecha_entrega - e.fecha_creacion) <= INTERVAL '1 day'
+            THEN 1 ELSE 0
+        END
+    )::INTEGER AS ordenes_24horas,
+    COALESCE(ROUND(AVG(
+        CASE
+            WHEN e.fecha_entrega IS NOT NULL
+            THEN EXTRACT(EPOCH FROM (e.fecha_entrega - e.fecha_creacion)) / 86400
+        END
+    )::NUMERIC, 2), 0::NUMERIC) AS dias_promedio,
+    COALESCE(SUM(CASE WHEN e.estado = 'FINALIZADO' THEN e.mano_obra ELSE 0 END), 0::NUMERIC(10,2)) AS total_mano_obra,
+    COALESCE(SUM(CASE WHEN e.estado = 'FINALIZADO' THEN e.total_orden ELSE 0 END), 0::NUMERIC(10,2)) AS ingreso_total,
+    SUM(CASE WHEN e.estado_pago IN ('PENDIENTE', 'ANTICIPO', 'PARCIAL') THEN 1 ELSE 0 END)::INTEGER AS ordenes_deuda,
+    MAX(e.fecha_creacion) AS ultima_orden
+FROM public.entregas e
+LEFT JOIN public.usuarios u ON e.tecnico_id = u.id
+WHERE e.tecnico_id IS NOT NULL
+GROUP BY e.tecnico_id, u.nombre, u.email
+ORDER BY ordenes_completadas DESC NULLS LAST;
+
+
+DROP VIEW IF EXISTS public.vw_flujo_caja_30dias;
+CREATE VIEW public.vw_flujo_caja_30dias AS
+SELECT
+    DATE(mc.fecha) AS fecha,
+    mc.tipo,
+    COUNT(*) AS cantidad_movimientos,
+    SUM(mc.monto)::NUMERIC(10,2) AS monto_total,
+    SUM(CASE WHEN tmc.afecta_saldo = 'INGRESO' THEN mc.monto ELSE 0 END)::NUMERIC(10,2) AS ingresos,
+    SUM(CASE WHEN tmc.afecta_saldo = 'EGRESO' THEN mc.monto ELSE 0 END)::NUMERIC(10,2) AS egresos
+FROM public.movimientos_caja mc
+JOIN public.catalogo_tipos_movimiento_caja tmc ON mc.tipo = tmc.codigo
+WHERE mc.fecha >= CURRENT_DATE - INTERVAL '30 days'
+GROUP BY DATE(mc.fecha), mc.tipo
+ORDER BY fecha DESC;
+
+
+-- ================================================================
+-- BLOQUE 15 — FUNCIÓN PARA PROYECCIÓN DE CASH FLOW
+--
+-- Calcula flujo histórico de los últimos 30 días y una proyección
+-- simple basada en promedios diarios.
+-- ================================================================
+
+CREATE OR REPLACE FUNCTION public.fn_flujo_caja_proyectado(dias_adelante INT DEFAULT 30)
+RETURNS TABLE (
+    fecha DATE,
+    tipo_flujo CHARACTER VARYING,
+    ingresos NUMERIC,
+    egresos NUMERIC,
+    saldo_neto NUMERIC,
+    saldo_acumulado NUMERIC
+) AS $$
+DECLARE
+    v_saldo_actual NUMERIC;
+    v_fecha_inicio DATE;
+    v_promedio_ingresos_diarios NUMERIC;
+    v_promedio_egresos_diarios NUMERIC;
+BEGIN
+    v_fecha_inicio := CURRENT_DATE - INTERVAL '30 days';
+
+    SELECT COALESCE(SUM(c.monto_inicial), 0)
+         + COALESCE(SUM(CASE WHEN tmc.afecta_saldo = 'INGRESO' THEN mc.monto ELSE 0 END), 0)
+         - COALESCE(SUM(CASE WHEN tmc.afecta_saldo = 'EGRESO' THEN mc.monto ELSE 0 END), 0)
+    INTO v_saldo_actual
+    FROM public.cajas c
+    LEFT JOIN public.movimientos_caja mc ON c.id = mc.caja_id
+    LEFT JOIN public.catalogo_tipos_movimiento_caja tmc ON mc.tipo = tmc.codigo
+    WHERE c.estado = 'ABIERTA';
+
+    SELECT
+        COALESCE(AVG(ingresos_dia), 0),
+        COALESCE(AVG(egresos_dia), 0)
+    INTO v_promedio_ingresos_diarios, v_promedio_egresos_diarios
+    FROM (
+        SELECT
+            DATE(mc.fecha) AS fecha_dia,
+            SUM(CASE WHEN tmc.afecta_saldo = 'INGRESO' THEN mc.monto ELSE 0 END) AS ingresos_dia,
+            SUM(CASE WHEN tmc.afecta_saldo = 'EGRESO' THEN mc.monto ELSE 0 END) AS egresos_dia
+        FROM public.movimientos_caja mc
+        JOIN public.catalogo_tipos_movimiento_caja tmc ON mc.tipo = tmc.codigo
+        WHERE mc.fecha >= v_fecha_inicio
+        GROUP BY DATE(mc.fecha)
+    ) t;
+
+    RETURN QUERY
+    SELECT
+        DATE(mc.fecha) AS fecha,
+        'HISTORICO'::CHARACTER VARYING AS tipo_flujo,
+        SUM(CASE WHEN tmc.afecta_saldo = 'INGRESO' THEN mc.monto ELSE 0 END)::NUMERIC(10,2) AS ingresos,
+        SUM(CASE WHEN tmc.afecta_saldo = 'EGRESO' THEN mc.monto ELSE 0 END)::NUMERIC(10,2) AS egresos,
+        (
+            SUM(CASE WHEN tmc.afecta_saldo = 'INGRESO' THEN mc.monto ELSE 0 END)
+            - SUM(CASE WHEN tmc.afecta_saldo = 'EGRESO' THEN mc.monto ELSE 0 END)
+        )::NUMERIC(10,2) AS saldo_neto,
+        (
+            v_saldo_actual
+            + SUM(CASE
+                WHEN tmc.afecta_saldo = 'INGRESO' THEN mc.monto
+                WHEN tmc.afecta_saldo = 'EGRESO' THEN -mc.monto
+                ELSE 0
+            END)
+        )::NUMERIC(10,2) AS saldo_acumulado
+    FROM public.movimientos_caja mc
+    JOIN public.catalogo_tipos_movimiento_caja tmc ON mc.tipo = tmc.codigo
+    WHERE mc.fecha >= v_fecha_inicio
+    GROUP BY DATE(mc.fecha)
+
+    UNION ALL
+
+    SELECT
+        (CURRENT_DATE + gs.n)::DATE AS fecha,
+        'PROYECTADO'::CHARACTER VARYING AS tipo_flujo,
+        v_promedio_ingresos_diarios::NUMERIC(10,2) AS ingresos,
+        v_promedio_egresos_diarios::NUMERIC(10,2) AS egresos,
+        (v_promedio_ingresos_diarios - v_promedio_egresos_diarios)::NUMERIC(10,2) AS saldo_neto,
+        (
+            v_saldo_actual
+            + (gs.n * (v_promedio_ingresos_diarios - v_promedio_egresos_diarios))
+        )::NUMERIC(10,2) AS saldo_acumulado
+    FROM generate_series(1, dias_adelante) AS gs(n)
+    ORDER BY fecha ASC;
+END;
+$$ LANGUAGE plpgsql;
 
 
 -- ================================================================

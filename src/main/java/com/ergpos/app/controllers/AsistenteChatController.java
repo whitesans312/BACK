@@ -22,6 +22,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -135,6 +138,22 @@ public class AsistenteChatController {
 
         if (esConsultaGeneral(q)) {
             return null;
+        }
+
+        Optional<RangoFechas> rango = extraerRangoFechas(q);
+        if (rango.isPresent() && matches(q, "ventas", "vendimos", "facturado", "ingresos")) {
+            RangoFechas r = rango.get();
+            LocalDateTime inicio = r.desde().atStartOfDay();
+            LocalDateTime fin = r.hasta().plusDays(1).atStartOfDay();
+            long count = ventaRepository.countCompletadasEnRango(inicio, fin);
+            Double total = ventaRepository.sumTotalCompletadasEnRango(inicio, fin);
+            return "💰 **Ventas del %s al %s:**\n• Ventas completadas: **%d**\n• Total facturado: **$%s COP**"
+                    .formatted(
+                            r.desde().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
+                            r.hasta().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
+                            count,
+                            formatCOP(total)
+                    );
         }
 
         // ── STOCK ─────────────────────────────────────────────────────────────
@@ -655,6 +674,66 @@ public class AsistenteChatController {
         if (v == null) return "N/D";
         return v.format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"));
     }
+
+    private Optional<RangoFechas> extraerRangoFechas(String q) {
+        Matcher fechasCompletas = Pattern
+                .compile("(\\d{1,2})[/-](\\d{1,2})[/-](\\d{4}).*?(?:al|hasta|a).*?(\\d{1,2})[/-](\\d{1,2})[/-](\\d{4})")
+                .matcher(q);
+        if (fechasCompletas.find()) {
+            LocalDate desde = LocalDate.of(
+                    Integer.parseInt(fechasCompletas.group(3)),
+                    Integer.parseInt(fechasCompletas.group(2)),
+                    Integer.parseInt(fechasCompletas.group(1))
+            );
+            LocalDate hasta = LocalDate.of(
+                    Integer.parseInt(fechasCompletas.group(6)),
+                    Integer.parseInt(fechasCompletas.group(5)),
+                    Integer.parseInt(fechasCompletas.group(4))
+            );
+            return Optional.of(ordenarRango(desde, hasta));
+        }
+
+        Matcher diasMes = Pattern
+                .compile("(\\d{1,2})\\s*(?:al|hasta|a)\\s*(\\d{1,2})\\s+de\\s+([a-z]+)(?:\\s+de\\s+(\\d{4}))?")
+                .matcher(q);
+        if (diasMes.find()) {
+            int mes = numeroMes(diasMes.group(3));
+            if (mes > 0) {
+                int year = diasMes.group(4) != null
+                        ? Integer.parseInt(diasMes.group(4))
+                        : LocalDate.now().getYear();
+                LocalDate desde = LocalDate.of(year, mes, Integer.parseInt(diasMes.group(1)));
+                LocalDate hasta = LocalDate.of(year, mes, Integer.parseInt(diasMes.group(2)));
+                return Optional.of(ordenarRango(desde, hasta));
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private RangoFechas ordenarRango(LocalDate desde, LocalDate hasta) {
+        return desde.isAfter(hasta) ? new RangoFechas(hasta, desde) : new RangoFechas(desde, hasta);
+    }
+
+    private int numeroMes(String mes) {
+        return switch (normalizar(mes)) {
+            case "enero" -> 1;
+            case "febrero" -> 2;
+            case "marzo" -> 3;
+            case "abril" -> 4;
+            case "mayo" -> 5;
+            case "junio" -> 6;
+            case "julio" -> 7;
+            case "agosto" -> 8;
+            case "septiembre", "setiembre" -> 9;
+            case "octubre" -> 10;
+            case "noviembre" -> 11;
+            case "diciembre" -> 12;
+            default -> 0;
+        };
+    }
+
+    private record RangoFechas(LocalDate desde, LocalDate hasta) {}
 
     private String itemsVenta(Venta v) {
         if (v.getItems() == null || v.getItems().isEmpty()) return "Sin items";

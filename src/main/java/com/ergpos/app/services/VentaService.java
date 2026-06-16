@@ -23,6 +23,17 @@ import com.ergpos.app.repositories.FacturaVentaRepository;
 import com.ergpos.app.repositories.MovimientoInventarioRepository;
 import com.ergpos.app.repositories.VentaRepository;
 
+/**
+ * Servicio de negocio para el módulo de Ventas POS.
+ * <p>
+ * Gestiona el ciclo de vida de las ventas al mostrador: registro, validación de stock,
+ * generación automática de factura con cálculo de IVA dinámico, descuento de inventario
+ * mediante movimientos de SALIDA y auditoría de eventos.
+ * </p>
+ *
+ * @author ERG-POS Dev Team
+ * @since 1.0
+ */
 @Service
 public class VentaService {
 
@@ -50,11 +61,29 @@ public class VentaService {
         this.configService          = configService;
     }
 
+    /** Retorna todas las ventas ordenadas de más reciente a más antigua. */
     public List<Venta> findAll()                     { return ventaRepository.findAllByOrderByFechaDesc(); }
+    /** Busca una venta por su UUID. */
     public Optional<Venta> findById(UUID id)         { return ventaRepository.findById(id); }
+    /** Filtra ventas por estado (COMPLETADA | CANCELADA | PENDIENTE). */
     public List<Venta> findByEstado(String estado)   { return ventaRepository.findByEstado(estado); }
+    /** Retorna las 10 ventas más recientes para el dashboard. */
     public List<Venta> findRecientes()               { return ventaRepository.findTop10ByOrderByFechaDesc(); }
 
+    /**
+     * Registra una nueva venta en el sistema de forma transaccional.
+     * <ol>
+     *   <li>Valida la disponibilidad de stock para cada ítem.</li>
+     *   <li>Guarda la venta y genera movimientos de SALIDA de inventario.</li>
+     *   <li>Genera automáticamente la factura de venta con IVA dinámico.</li>
+     *   <li>Registra el evento en auditoría.</li>
+     * </ol>
+     *
+     * @param venta la venta a registrar con sus ítems
+     * @return la {@link Venta} persistida con su ID, total y factura asociada
+     * @throws IllegalArgumentException si un producto no existe
+     * @throws IllegalStateException    si el stock es insuficiente para algún ítem
+     */
     @Transactional
     public Venta save(Venta venta) {
         resolverCliente(venta);
@@ -149,6 +178,14 @@ public class VentaService {
         }
     }
 
+    /**
+     * Cancela una venta existente si aún no ha sido completada.
+     *
+     * @param id UUID de la venta a cancelar
+     * @return la {@link Venta} actualizada con estado CANCELADA
+     * @throws IllegalArgumentException si la venta no existe
+     * @throws IllegalStateException    si ya estaba cancelada o si está completada
+     */
     @Transactional
     public Venta cancelar(UUID id) {
         Venta venta = ventaRepository.findById(id)
@@ -183,6 +220,13 @@ public class VentaService {
 
     // ── Estadísticas ──────────────────────────────────────────────────────────
 
+    /**
+     * Calcula un resumen general de ventas para el dashboard.
+     * <p>Incluye totales, completadas, canceladas, ingresos del día y del mes actual.</p>
+     *
+     * @return {@link Map} con las claves: totalVentas, completadas, canceladas,
+     *         ingresoTotal, ingresosHoy, ingresosMes
+     */
     public Map<String, Object> getResumenGeneral() {
         long totalVentas    = ventaRepository.count();
         long completadas    = ventaRepository.countByEstado("COMPLETADA");

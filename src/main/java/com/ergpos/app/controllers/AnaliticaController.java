@@ -1,5 +1,6 @@
 package com.ergpos.app.controllers;
 
+import com.ergpos.app.model.Caja;
 import com.ergpos.app.model.Cliente;
 import com.ergpos.app.model.Producto;
 import com.ergpos.app.model.Usuario;
@@ -330,6 +331,202 @@ public class AnaliticaController {
         result.put("proyeccion", proyeccionList);
         result.put("crecimientoPromedioPorcentaje", Math.round(crecimiento * 10.0) / 10.0);
         result.put("estimadoMesProximo", Math.round(totalProyectadoMes * 100.0) / 100.0);
+
+        return ResponseEntity.ok(result);
+    }
+
+    // ── 5. Rendimiento de Técnicos (Alias para consistencia) ────────────────────
+    @GetMapping("/rendimiento-tecnicos")
+    public ResponseEntity<List<Map<String, Object>>> getRendimientoTecnicos() {
+        return getTecnicosPerformance();
+    }
+
+    // ── 6. Flujo de Caja (Cash Flow) – Últimos 30 días + Proyección ────────────
+    @GetMapping("/flujo-caja")
+    public ResponseEntity<Map<String, Object>> getFlujoCaja() {
+        LocalDateTime desde = LocalDateTime.now().minusDays(30);
+        LocalDateTime hasta = LocalDateTime.now();
+
+        // Obtener ingresos y egresos diarios desde movimientos_caja
+        List<Object[]> movimientosData = em.createQuery(
+                "SELECT FUNCTION('DATE', mc.fecha), mc.tipo, SUM(mc.monto) " +
+                "FROM MovimientoCaja mc " +
+                "WHERE mc.fecha >= :desde AND mc.fecha <= :hasta " +
+                "GROUP BY FUNCTION('DATE', mc.fecha), mc.tipo " +
+                "ORDER BY FUNCTION('DATE', mc.fecha) DESC", Object[].class)
+                .setParameter("desde", desde)
+                .setParameter("hasta", hasta)
+                .getResultList();
+
+        // Agrupar por día
+        Map<String, Map<String, Object>> diarios = new HashMap<>();
+        for (Object[] row : movimientosData) {
+            java.time.LocalDate fecha = (java.time.LocalDate) row[0];
+            String tipo = (String) row[1];
+            BigDecimal monto = row[2] != null ? BigDecimal.valueOf(((Number) row[2]).doubleValue()) : BigDecimal.ZERO;
+
+            String key = fecha.toString();
+            diarios.putIfAbsent(key, new HashMap<>());
+            Map<String, Object> dayData = diarios.get(key);
+
+            if (tipo.matches("INGRESO|PAGO_VENTA|PAGO_ORDEN")) {
+                BigDecimal ingresos = (BigDecimal) dayData.getOrDefault("ingresos", BigDecimal.ZERO);
+                dayData.put("ingresos", ingresos.add(monto));
+            } else if (tipo.matches("EGRESO|COMPRA|DEVOLUCION")) {
+                BigDecimal egresos = (BigDecimal) dayData.getOrDefault("egresos", BigDecimal.ZERO);
+                dayData.put("egresos", egresos.add(monto));
+            }
+
+            dayData.put("fecha", fecha);
+        }
+
+        // Calcular netos y acumulados
+        List<Map<String, Object>> flujoDiario = new ArrayList<>();
+        BigDecimal saldoAcumulado = BigDecimal.ZERO;
+        List<String> fechasOrdenadas = new ArrayList<>(diarios.keySet());
+        Collections.sort(fechasOrdenadas);
+
+        for (String fecha : fechasOrdenadas) {
+            Map<String, Object> data = diarios.get(fecha);
+            BigDecimal ing = (BigDecimal) data.getOrDefault("ingresos", BigDecimal.ZERO);
+            BigDecimal egr = (BigDecimal) data.getOrDefault("egresos", BigDecimal.ZERO);
+            BigDecimal neto = ing.subtract(egr);
+            saldoAcumulado = saldoAcumulado.add(neto);
+
+            Map<String, Object> dayMap = new HashMap<>();
+            dayMap.put("fecha", data.get("fecha"));
+            dayMap.put("ingresos", ing.setScale(2, RoundingMode.HALF_UP));
+            dayMap.put("egresos", egr.setScale(2, RoundingMode.HALF_UP));
+            dayMap.put("neto", neto.setScale(2, RoundingMode.HALF_UP));
+            dayMap.put("saldoAcumulado", saldoAcumulado.setScale(2, RoundingMode.HALF_UP));
+            flujoDiario.add(dayMap);
+        }
+
+        // Calcular totales
+        BigDecimal totalIngresos = flujoDiario.stream()
+                .map(m -> (BigDecimal) m.get("ingresos"))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalEgresos = flujoDiario.stream()
+                .map(m -> (BigDecimal) m.get("egresos"))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal neto = totalIngresos.subtract(totalEgresos);
+
+        // Obtener saldo actual de cajas abiertas
+        BigDecimal saldoActual = calcularSaldoActualCajasAbiertas().setScale(2, RoundingMode.HALF_UP);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("periodo", "Últimos 30 días");
+        result.put("desde", desde.toLocalDate());
+        result.put("hasta", hasta.toLocalDate());
+        result.put("flujoDiario", flujoDiario);
+        result.put("totalIngresos", totalIngresos.setScale(2, RoundingMode.HALF_UP));
+        result.put("totalEgresos", totalEgresos.setScale(2, RoundingMode.HALF_UP));
+        result.put("netoTotal", neto.setScale(2, RoundingMode.HALF_UP));
+        result.put("saldoActual", saldoActual);
+
+        return ResponseEntity.ok(result);
+    }
+
+    // ── 7. Productos sin movimiento (no vendidos en X días) ────────────────────
+    private BigDecimal calcularSaldoActualCajasAbiertas() {
+        List<Caja> cajasAbiertas = em.createQuery(
+                "SELECT c FROM Caja c WHERE c.estado = 'ABIERTA'", Caja.class)
+                .getResultList();
+
+        BigDecimal saldo = BigDecimal.ZERO;
+        for (Caja caja : cajasAbiertas) {
+            saldo = saldo.add(caja.getMontoInicial() != null ? caja.getMontoInicial() : BigDecimal.ZERO);
+
+            List<Object[]> movimientos = em.createQuery(
+                    "SELECT mc.tipo, SUM(mc.monto) " +
+                    "FROM MovimientoCaja mc " +
+                    "WHERE mc.caja.id = :cajaId " +
+                    "GROUP BY mc.tipo", Object[].class)
+                    .setParameter("cajaId", caja.getId())
+                    .getResultList();
+
+            for (Object[] row : movimientos) {
+                String tipo = (String) row[0];
+                BigDecimal monto = row[1] != null
+                        ? BigDecimal.valueOf(((Number) row[1]).doubleValue())
+                        : BigDecimal.ZERO;
+
+                if (tipo.matches("INGRESO|PAGO_VENTA|PAGO_ORDEN")) {
+                    saldo = saldo.add(monto);
+                } else if (tipo.matches("EGRESO|COMPRA|DEVOLUCION")) {
+                    saldo = saldo.subtract(monto);
+                }
+            }
+        }
+
+        return saldo;
+    }
+
+    @GetMapping("/sin-movimiento")
+    public ResponseEntity<List<Map<String, Object>>> getProductosSinMovimiento(
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "30") int dias) {
+
+        LocalDateTime desde = LocalDateTime.now().minusDays(dias);
+
+        // Obtener productos activos
+        List<Producto> productos = em.createQuery(
+                "SELECT p FROM Producto p WHERE p.activo = true", Producto.class)
+                .getResultList();
+
+        // Productos que SÍ tuvieron movimiento en el período
+        Set<UUID> conMovimiento = new HashSet<>();
+
+        List<UUID> conVenta = em.createQuery(
+                "SELECT DISTINCT vi.producto.id FROM VentaItem vi " +
+                "WHERE vi.venta.fecha >= :desde", UUID.class)
+                .setParameter("desde", desde)
+                .getResultList();
+        conMovimiento.addAll(conVenta);
+
+        List<UUID> conEntrega = em.createQuery(
+                "SELECT DISTINCT ei.producto.id FROM EntregaItem ei " +
+                "WHERE ei.entrega.fechaEntrega >= :desde", UUID.class)
+                .setParameter("desde", desde)
+                .getResultList();
+        conMovimiento.addAll(conEntrega);
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Producto prod : productos) {
+            if (!conMovimiento.contains(prod.getId())) {
+                // Obtener última venta
+                List<LocalDateTime> ultimaVenta = em.createQuery(
+                        "SELECT MAX(v.fecha) FROM VentaItem vi " +
+                        "JOIN vi.venta v WHERE vi.producto.id = :prodId", LocalDateTime.class)
+                        .setParameter("prodId", prod.getId())
+                        .setMaxResults(1)
+                        .getResultList();
+
+                LocalDateTime ultimaFecha = ultimaVenta.isEmpty() || ultimaVenta.get(0) == null
+                        ? null
+                        : ultimaVenta.get(0);
+
+                Map<String, Object> map = new HashMap<>();
+                map.put("id", prod.getId());
+                map.put("nombre", prod.getNombre());
+                map.put("codigo", prod.getCodigo());
+                map.put("stock", prod.getStock());
+                map.put("categoria", prod.getCategoria() != null ? prod.getCategoria().getNombre() : "Sin categoría");
+                map.put("ultimaVenta", ultimaFecha);
+                map.put("diasSinMovimiento", ultimaFecha == null ? "Sin historial" : 
+                    Duration.between(ultimaFecha, LocalDateTime.now()).toDays() + " días");
+                result.add(map);
+            }
+        }
+
+        // Ordenar por últimaFecha (nulos primero)
+        result.sort((a, b) -> {
+            LocalDateTime fA = (LocalDateTime) a.get("ultimaVenta");
+            LocalDateTime fB = (LocalDateTime) b.get("ultimaVenta");
+            if (fA == null && fB == null) return 0;
+            if (fA == null) return -1;
+            if (fB == null) return 1;
+            return fA.compareTo(fB);
+        });
 
         return ResponseEntity.ok(result);
     }

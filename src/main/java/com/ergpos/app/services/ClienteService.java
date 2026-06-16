@@ -17,6 +17,18 @@ import com.ergpos.app.repositories.EntregaRepository;
 import com.ergpos.app.repositories.VentaRepository;
 import com.ergpos.app.repositories.DevolucionGarantiaRepository;
 
+/**
+ * Servicio de negocio para la gestión de clientes del sistema.
+ * <p>
+ * Provee operaciones CRUD sobre la entidad {@link Cliente} con validaciones
+ * de negocio (unicidad de teléfono y email, formato de campos). Adicionalmente
+ * expone el perfil 360° del cliente consolidando ventas, órdenes de servicio,
+ * garantías y KPIs financieros.
+ * </p>
+ *
+ * @author ERG-POS Dev Team
+ * @since 1.0
+ */
 @Service
 public class ClienteService {
 
@@ -53,6 +65,15 @@ public class ClienteService {
         return clienteRepository.findById(id);
     }
 
+    /**
+     * Construye el perfil 360° del cliente consolidando ventas POS, órdenes de
+     * servicio técnico y devoluciones/garantías junto a KPIs calculados en tiempo real.
+     *
+     * @param clienteId UUID del cliente a consultar
+     * @return {@link Map} con claves: {@code cliente}, {@code kpis}, {@code ventas},
+     *         {@code ordenes}, {@code devoluciones}
+     * @throws IllegalArgumentException si el cliente no existe
+     */
     public Map<String, Object> getPerfilCompleto(UUID clienteId) {
         Cliente cliente = clienteRepository.findById(clienteId)
                 .orElseThrow(() -> new IllegalArgumentException("Cliente no encontrado"));
@@ -118,6 +139,15 @@ public class ClienteService {
 
     // ── Guardar (CREATE / UPDATE) ───────────────────────────
 
+    /**
+     * Persiste o actualiza un cliente aplicando normalización, validaciones de formato
+     * y unicidad de teléfono/email.
+     *
+     * @param cliente entidad a guardar/actualizar
+     * @return el {@link Cliente} persistido
+     * @throws IllegalArgumentException si el teléfono, email o nombre no cumplen el formato
+     *                                  o si ya existe otro cliente con el mismo teléfono/email
+     */
     public Cliente save(Cliente cliente) {
 
         // ── Normalización ─────────────────────────────
@@ -186,6 +216,15 @@ public class ClienteService {
 
     // ── Obtener o crear cliente automáticamente ─────────────
 
+    /**
+     * Busca un cliente por teléfono; si no existe, lo crea automáticamente
+     * con los datos mínimos proporcionados. Útil durante el flujo de venta rápida.
+     *
+     * @param telefono teléfono del cliente (obligatorio, solo dígitos, 7-20 caracteres)
+     * @param nombre   nombre del cliente (opcional)
+     * @return el {@link Cliente} existente o recién creado
+     * @throws IllegalArgumentException si el teléfono es nulo/vacío o tiene formato incorrecto
+     */
     public Cliente obtenerOCrear(String telefono, String nombre) {
 
         if (telefono == null || telefono.isBlank()) {
@@ -229,6 +268,12 @@ public class ClienteService {
 
     // ── Soft delete ─────────────────────────────────────────
 
+    /**
+     * Realiza un borrado lógico del cliente (soft delete) marcando {@code activo = false}.
+     *
+     * @param id UUID del cliente a desactivar
+     * @throws IllegalArgumentException si el cliente no existe
+     */
     public void softDelete(UUID id) {
         Cliente cliente = clienteRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Cliente no encontrado"));
@@ -239,6 +284,14 @@ public class ClienteService {
 
     // ── Activar / desactivar ───────────────────────────────
 
+    /**
+     * Activa o desactiva un cliente.
+     *
+     * @param id     UUID del cliente
+     * @param activo {@code true} para activar, {@code false} para desactivar
+     * @return el {@link Cliente} actualizado
+     * @throws IllegalArgumentException si el cliente no existe
+     */
     public Cliente toggleActivo(UUID id, boolean activo) {
         Cliente cliente = clienteRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Cliente no encontrado"));

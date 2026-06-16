@@ -2,6 +2,7 @@ package com.ergpos.app.controllers;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -193,5 +194,109 @@ public class ReporteController {
         data.put("productosMasVendidos", productosMasVendidos);
 
         return data;
+    }
+
+    /**
+     * GET /api/reportes/ventas-por-vendedor
+     * Retorna resumen de ventas segmentadas por vendedor
+     */
+    @GetMapping("/ventas-por-vendedor")
+    public List<Map<String, Object>> getVentasPorVendedor() {
+        List<Map<String, Object>> vendedoresData = ventaRepository.findAll().stream()
+            .filter(v -> v.getVendedor() != null)
+            .collect(java.util.stream.Collectors.groupingBy(
+                Venta::getVendedor,
+                java.util.stream.Collectors.toList()
+            ))
+            .entrySet()
+            .stream()
+            .map(entry -> {
+                var vendedor = entry.getKey();
+                var ventas = entry.getValue();
+                long total = ventas.size();
+                long completadas = ventas.stream().filter(v -> "COMPLETADA".equals(v.getEstado())).count();
+                Double ingreso = ventas.stream()
+                    .filter(v -> "COMPLETADA".equals(v.getEstado()))
+                    .map(Venta::getTotal)
+                    .filter(java.util.Objects::nonNull)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .doubleValue();
+                
+                Map<String, Object> map = new HashMap<>();
+                map.put("vendedorId", vendedor.getId());
+                map.put("vendedor", vendedor.getNombre());
+                map.put("email", vendedor.getEmail());
+                map.put("totalVentas", total);
+                map.put("ventasCompletadas", completadas);
+                map.put("ingresoTotal", ingreso);
+                map.put("tasaConversion", total > 0 ? Math.round((completadas * 100.0 / total) * 10.0) / 10.0 : 0.0);
+                return map;
+            })
+            .sorted((a, b) -> Double.compare((Double) b.get("ingresoTotal"), (Double) a.get("ingresoTotal")))
+            .collect(java.util.stream.Collectors.toList());
+
+        return vendedoresData;
+    }
+
+    /**
+     * GET /api/reportes/rentabilidad-categoria
+     * Retorna análisis de rentabilidad por categoría de producto
+     */
+    @GetMapping("/rentabilidad-categoria")
+    public List<Map<String, Object>> getRentabilidadCategoria() {
+        List<Map<String, Object>> categoriasData = productoRepository.findAll().stream()
+            .filter(p -> p.getCategoria() != null)
+            .collect(java.util.stream.Collectors.groupingBy(
+                p -> p.getCategoria(),
+                java.util.stream.Collectors.toList()
+            ))
+            .entrySet()
+            .stream()
+            .map(entry -> {
+                var categoria = entry.getKey();
+                var productos = entry.getValue();
+                
+                // Contar items vendidos en esta categoría
+                long itemsVendidos = 0;
+                long cantidadTotal = 0;
+                Double ingresoTotal = 0.0;
+                
+                for (var p : productos) {
+                    var ventasItems = ventaRepository.findAll().stream()
+                        .flatMap(v -> v.getItems().stream())
+                        .filter(vi -> vi.getProducto().getId().equals(p.getId()))
+                        .filter(vi -> "COMPLETADA".equals(vi.getVenta().getEstado()))
+                        .collect(java.util.stream.Collectors.toList());
+                    
+                    itemsVendidos += ventasItems.size();
+                    cantidadTotal += ventasItems.stream().mapToLong(vi -> vi.getCantidad()).sum();
+                    ingresoTotal += ventasItems.stream()
+                        .map(vi -> vi.getSubtotal())
+                        .filter(java.util.Objects::nonNull)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add)
+                        .doubleValue();
+                }
+
+                Double margenPromedio = 40.0; // Margen estimado
+                Double costoEstimado = ingresoTotal * (1.0 - margenPromedio / 100.0);
+                Double gananciaEstimada = ingresoTotal * (margenPromedio / 100.0);
+
+                Map<String, Object> map = new HashMap<>();
+                map.put("categoriaId", categoria.getId());
+                map.put("categoria", categoria.getNombre());
+                map.put("productosActivos", productos.size());
+                map.put("itemsVendidos", itemsVendidos);
+                map.put("cantidadTotal", cantidadTotal);
+                map.put("ingresoTotal", Math.round(ingresoTotal * 100.0) / 100.0);
+                map.put("costoEstimado", Math.round(costoEstimado * 100.0) / 100.0);
+                map.put("gananciaEstimada", Math.round(gananciaEstimada * 100.0) / 100.0);
+                map.put("margenPorcentaje", margenPromedio);
+                
+                return map;
+            })
+            .sorted((a, b) -> Double.compare((Double) b.get("ingresoTotal"), (Double) a.get("ingresoTotal")))
+            .collect(java.util.stream.Collectors.toList());
+
+        return categoriasData;
     }
 }

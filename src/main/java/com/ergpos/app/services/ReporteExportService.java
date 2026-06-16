@@ -7,6 +7,7 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 import java.awt.Color;
 
 import org.apache.poi.ss.usermodel.*;
@@ -30,6 +31,7 @@ import com.lowagie.text.pdf.PdfWriter;
 import com.ergpos.app.model.Venta;
 import com.ergpos.app.model.VentaItem;
 import com.ergpos.app.model.Producto;
+import com.ergpos.app.model.Entrega;
 import com.ergpos.app.repositories.VentaRepository;
 import com.ergpos.app.repositories.ProductoRepository;
 import com.ergpos.app.repositories.CompraRepository;
@@ -860,6 +862,88 @@ public class ReporteExportService {
     }
 
     // Métodos auxiliares
+    public byte[] exportarTecnicosExcel(LocalDateTime desde, LocalDateTime hasta) {
+        List<Entrega> entregas = entregaRepository.findAll();
+
+        try (Workbook workbook = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            Sheet sheet = workbook.createSheet("Tecnicos");
+            DataFormat df = workbook.createDataFormat();
+
+            CellStyle headerStyle = workbook.createCellStyle();
+            org.apache.poi.ss.usermodel.Font headerFont = workbook.createFont();
+            headerFont.setBold(true);
+            headerStyle.setFont(headerFont);
+            headerStyle.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+            headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+            setBorders(headerStyle);
+
+            CellStyle moneyStyle = workbook.createCellStyle();
+            moneyStyle.setDataFormat(df.getFormat("$#,##0"));
+            setBorders(moneyStyle);
+
+            CellStyle numberStyle = workbook.createCellStyle();
+            numberStyle.setDataFormat(df.getFormat("#,##0.0"));
+            setBorders(numberStyle);
+
+            Row header = sheet.createRow(0);
+            String[] headers = {
+                    "Tecnico", "Email", "Ordenes totales", "Finalizadas",
+                    "Activas", "Mano de obra", "Promedio horas", "Ordenes con deuda"
+            };
+            for (int i = 0; i < headers.length; i++) {
+                Cell cell = header.createCell(i);
+                cell.setCellValue(headers[i]);
+                cell.setCellStyle(headerStyle);
+            }
+
+            Map<String, List<Entrega>> porTecnico = entregas.stream()
+                    .filter(e -> e.getTecnico() != null)
+                    .filter(e -> e.getFechaCreacion() != null
+                            && !e.getFechaCreacion().isBefore(desde)
+                            && !e.getFechaCreacion().isAfter(hasta))
+                    .collect(java.util.stream.Collectors.groupingBy(e -> e.getTecnico().getId().toString()));
+
+            int rowIdx = 1;
+            for (List<Entrega> lista : porTecnico.values()) {
+                Entrega first = lista.get(0);
+                long finalizadas = lista.stream().filter(e -> "FINALIZADO".equals(e.getEstado())).count();
+                long activas = lista.stream().filter(e -> "PENDIENTE".equals(e.getEstado()) || "EN_PROCESO".equals(e.getEstado())).count();
+                long deuda = lista.stream().filter(e -> List.of("PENDIENTE", "ANTICIPO", "PARCIAL").contains(e.getEstadoPago())).count();
+                BigDecimal manoObra = lista.stream()
+                        .filter(e -> "FINALIZADO".equals(e.getEstado()))
+                        .map(Entrega::getManoObra)
+                        .filter(java.util.Objects::nonNull)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+                double promedioHoras = lista.stream()
+                        .filter(e -> "FINALIZADO".equals(e.getEstado()))
+                        .filter(e -> e.getFechaCreacion() != null && e.getFechaEntrega() != null)
+                        .mapToLong(e -> java.time.Duration.between(e.getFechaCreacion(), e.getFechaEntrega()).toMinutes())
+                        .average()
+                        .orElse(0.0) / 60.0;
+
+                Row row = sheet.createRow(rowIdx++);
+                row.createCell(0).setCellValue(first.getTecnico().getNombre());
+                row.createCell(1).setCellValue(first.getTecnico().getEmail());
+                row.createCell(2).setCellValue(lista.size());
+                row.createCell(3).setCellValue(finalizadas);
+                row.createCell(4).setCellValue(activas);
+                Cell manoCell = row.createCell(5);
+                manoCell.setCellValue(manoObra.doubleValue());
+                manoCell.setCellStyle(moneyStyle);
+                Cell promedioCell = row.createCell(6);
+                promedioCell.setCellValue(promedioHoras);
+                promedioCell.setCellStyle(numberStyle);
+                row.createCell(7).setCellValue(deuda);
+            }
+
+            autoSizeOrSetWidths(sheet, headers.length, new int[]{24, 28, 16, 14, 12, 16, 16, 18});
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException("Error al generar Excel de tecnicos", e);
+        }
+    }
+
     private void setBorders(CellStyle style) {
         style.setBorderBottom(BorderStyle.THIN);
         style.setBottomBorderColor(IndexedColors.GREY_25_PERCENT.getIndex());
